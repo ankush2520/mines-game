@@ -24,10 +24,11 @@ export default function GridCreator({ rows = 5, cols = 5 }: GridCreatorProps) {
 
   return (
     <div className="flex flex-col items-center">
-      <div
-        className="grid gap-2 my-6 p-2"
-        style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, maxWidth: cols * 64 }}
-      >
+      <div className="bg-amber-200 rounded-lg p-8 min-h-screen flex flex-col items-center pt-12">
+        <div
+          className="grid gap-2 mx-auto"
+          style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, width: cols * 60 }}
+        >
         {cells.map((i) =>
           opened[i] ? (
             <div key={i} className="w-full aspect-square border border-sky-400 rounded-lg inline-flex items-center justify-center bg-transparent" aria-label={`gem-${i}`}>
@@ -45,10 +46,11 @@ export default function GridCreator({ rows = 5, cols = 5 }: GridCreatorProps) {
       </div>
       <button
         className="mt-6 px-8 py-2 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600 active:translate-y-0.5"
-        style={{ width: cols * 32 }}
+        style={{ width: cols * 30 }}
       >
         Play
       </button>
+      </div>
     </div>
   );
 }
