@@ -1,26 +1,92 @@
 @import "tailwindcss";
 
+html, body {
+  overflow: hidden;
+  height: 100%;
+}
+
 :root {
-  --background: #f5efe6;
-  --foreground: #171717;
+  --bg-dark: #0B1020;
+  --panel-main: #111A2E;
+  --panel-inner: #172445;
+  --border-color: #223055;
+  --text-light: #EAF0FF;
+  --text-muted: #A7B2D6;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-background: var(--bg-dark);
+  --color-foreground: var(--text-light);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+body {
+  background: linear-gradient(135deg, #0B1020 0%, #111A2E 50%, #0D1428 100%);
+  background-attachment: fixed;
+  color: var(--text-light);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Animations */
+@keyframes tileHover {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes glow {
+  0%, 100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.1);
+  }
+}
+
+/* Utility classes */
+.panel-shadow {
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.panel-border {
+  border: 1px solid var(--border-color);
+}
+
+.button-shadow {
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+}
+
+.button-shadow-lg {
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.5), 0 0 20px rgba(59, 130, 246, 0.3);
+}
+
+.tile-hover {
+  transition: all 0.2s ease;
+}
+
+.tile-hover:hover {
+  transform: scale(1.02);
+  filter: brightness(1.1);
+}
+
+.interactive-hover {
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
