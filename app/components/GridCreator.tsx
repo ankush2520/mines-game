@@ -74,6 +74,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
   const gameplayRef = useRef<Gameplay | null>(null);
   const autoModeRef = useRef<AutoMode | null>(null);
   const autoPlayLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const initialRunsRef = useRef(0);
 
   const handleClick = (i: number) => {
     if (!gameStarted || !gameplayRef.current || gameOver) return;
@@ -222,6 +223,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
     if (controlMode !== "auto" || selectedCount === 0 || gameStarted || autoPlayActive) return;
 
     setAutoPlayResult(null);
+    initialRunsRef.current = autoPickCount;
     setAutoPlayActive(true);
   };
 
@@ -231,6 +233,10 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
       clearTimeout(autoPlayLoopRef.current);
       autoPlayLoopRef.current = null;
     }
+    setOpened(Array(rows * cols).fill(false));
+    setRevealedMines(Array(rows * cols).fill(false));
+    setAutoRevealed(Array(rows * cols).fill(false));
+    setClickedByUser(Array(rows * cols).fill(false));
   };
 
   // Reset selectedTiles when minesCount changes
@@ -244,6 +250,18 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
       setAutoPickCount(prev => Math.max(0, prev));
     }
   }, [controlMode, gameStarted]);
+
+  // Reset grid when switching to auto mode
+  useEffect(() => {
+    if (controlMode === "auto") {
+      setOpened(Array(rows * cols).fill(false));
+      setRevealedMines(Array(rows * cols).fill(false));
+      setAutoRevealed(Array(rows * cols).fill(false));
+      setClickedByUser(Array(rows * cols).fill(false));
+      setGameStarted(false);
+      setGameOver(false);
+    }
+  }, [controlMode, rows, cols]);
 
   // Auto mode auto-pick behavior (manual mode)
   useEffect(() => {
@@ -285,13 +303,16 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
         const newClickedByUser = Array(totalCells).fill(false);
         const newMinePositions = new Set<number>();
 
-        for (let i = 0; i < totalCells; i++) {
-          const isMine = Math.random() < 0.5;
-          if (isMine) {
-            newRevealedMines[i] = true;
-            newMinePositions.add(i);
-          }
+        // Generate exactly minesCount random mine positions
+        while (newMinePositions.size < minesCount) {
+          const randomPos = Math.floor(Math.random() * totalCells);
+          newMinePositions.add(randomPos);
         }
+
+        // Mark mines in the revealed array
+        newMinePositions.forEach(pos => {
+          newRevealedMines[pos] = true;
+        });
 
         setMinePositions(newMinePositions);
         setOpened(newOpened);
@@ -307,6 +328,17 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
         setRevealedMines(Array(totalCells).fill(false));
         setAutoRevealed(Array(totalCells).fill(false));
         setClickedByUser(Array(totalCells).fill(false));
+        
+        if (initialRunsRef.current > 0) {
+          setAutoPickCount(prev => {
+            const next = prev - 1;
+            if (next <= 0) {
+              setTimeout(() => handleStopAutoPlay(), 0);
+              return 0;
+            }
+            return next;
+          });
+        }
 
         await sleep(1000);
       }
@@ -369,7 +401,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                     className="w-full aspect-square rounded-md inline-flex items-center justify-center tile-hover overflow-hidden" 
                     style={{ 
                       backgroundColor: shouldApplyAutoStyle ? '#16213E' : COLORS.tile_default, 
-                      border: BORDERS.standard, 
+                      border: isSelected ? `2px solid ${COLORS.tile_selected}` : BORDERS.standard, 
                       boxShadow: SHADOWS.md,
                       opacity: shouldApplyAutoStyle ? 0.6 : 1,
                       filter: shouldApplyAutoStyle ? 'brightness(0.9)' : 'brightness(1)'
@@ -390,7 +422,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                     className="w-full aspect-square rounded-md inline-flex items-center justify-center tile-hover overflow-hidden" 
                     style={{ 
                       backgroundColor: shouldApplyAutoStyle ? '#16213E' : COLORS.tile_default, 
-                      border: BORDERS.standard, 
+                      border: isSelected ? `2px solid ${COLORS.tile_selected}` : BORDERS.standard, 
                       boxShadow: SHADOWS.md,
                       opacity: shouldApplyAutoStyle ? 0.6 : 1,
                       filter: shouldApplyAutoStyle ? 'brightness(0.9)' : 'brightness(1)'
