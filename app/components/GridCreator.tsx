@@ -66,6 +66,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
   // ========== AUTO MODE STATE ==========
   const [selectedTiles, setSelectedTiles] = useState<boolean[]>(Array(rows * cols).fill(false));
   const [autoPlayCount, setAutoPlayCount] = useState(1);
+  const [autoPickCount, setAutoPickCount] = useState(1);
   const [autoPlayActive, setAutoPlayActive] = useState(false);
   const [autoPlayResult, setAutoPlayResult] = useState<"win" | "loss" | null>(null);
 
@@ -202,44 +203,32 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
   const handleTileSelect = (i: number) => {
     if (controlMode === "auto" && !gameStarted) {
       const newSelected = selectedTiles.slice();
-      newSelected[i] = !newSelected[i];
-      setSelectedTiles(newSelected);
+      const isCurrentlySelected = newSelected[i];
+      const currentSelectedCount = newSelected.filter(s => s).length;
+      const maxSelectableTiles = (rows * cols) - minesCount;
+      
+      // Allow deselecting always, or selecting if below max
+      if (isCurrentlySelected || currentSelectedCount < maxSelectableTiles) {
+        newSelected[i] = !newSelected[i];
+        setSelectedTiles(newSelected);
+      }
     }
   };
 
   const handleStartAutoPlay = () => {
     const selectedCount = selectedTiles.filter(s => s).length;
-    
-    // Must have at least one tile selected
-    if (controlMode !== "auto" || selectedCount === 0) return;
-    
-    if (!gameStarted) {
-      const betAmount = getPlayAmount();
-      if (credit < betAmount) {
-        alert('Insufficient credits!');
-        return;
-      }
-      
-      setCredit(credit - betAmount);
-      gameplayRef.current = new Gameplay(rows, cols, minesCount, betAmount);
-      gameplayRef.current.startGame();
-      setMinePositions(new Set(gameplayRef.current.getMinePositions()));
-      setGameStarted(true);
-      setGameOver(false);
-      setOpened(Array(rows * cols).fill(false));
-      setRevealedMines(Array(rows * cols).fill(false));
-      setClickedByUser(Array(rows * cols).fill(false));
-      setAutoRevealed(Array(rows * cols).fill(false));
-      setMultiplier(1);
-    }
-    
+
+    // Must be in auto mode, idle, and have at least one tile selected
+    if (controlMode !== "auto" || selectedCount === 0 || gameStarted || autoPlayActive) return;
+
+    setAutoPlayResult(null);
     setAutoPlayActive(true);
   };
 
   const handleStopAutoPlay = () => {
     setAutoPlayActive(false);
     if (autoPlayLoopRef.current) {
-      clearInterval(autoPlayLoopRef.current);
+      clearTimeout(autoPlayLoopRef.current);
       autoPlayLoopRef.current = null;
     }
   };
@@ -248,6 +237,13 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
   useEffect(() => {
     setSelectedTiles(Array(rows * cols).fill(false));
   }, [minesCount, rows, cols]);
+
+  // Clamp runs input when switching to auto mode
+  useEffect(() => {
+    if (controlMode === "auto" && !gameStarted) {
+      setAutoPickCount(prev => Math.max(0, prev));
+    }
+  }, [controlMode, gameStarted]);
 
   // Auto mode auto-pick behavior (manual mode)
   useEffect(() => {
@@ -273,54 +269,68 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
 
   // Auto play loop effect
   useEffect(() => {
-    if (!autoPlayActive || !gameStarted || !gameplayRef.current) return;
+    if (!autoPlayActive) return;
 
+    const totalCells = rows * cols;
     let isRunning = true;
-    
-    const roundLoop = async () => {
-      let roundNumber = 0;
-      const totalCells = rows * cols;
-      const playCount = autoPlayCount;
-      const selected = selectedTiles.slice();
-      
-      while (isRunning && roundNumber < playCount) {
-        roundNumber++;
-        
-        // Reveal all tiles
-        setOpened(Array(totalCells).fill(true));
-        
-        // Check win condition: all gems (non-mine cells) must be in selectedTiles
-        const gemsInSelectedTiles = Array.from({length: totalCells}).every((_, i) => 
-          minePositions.has(i) || selected[i]
-        );
-        
-        const isWin = gemsInSelectedTiles;
-        setAutoPlayResult(isWin ? "win" : "loss");
-        
-        // Wait 1 second before next round
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        if (isRunning && roundNumber < playCount) {
-          // Reset for next round
-          setOpened(Array(totalCells).fill(false));
-          setRevealedMines(Array(totalCells).fill(false));
-          gameplayRef.current?.reset();
-          gameplayRef.current?.startGame();
-          setMinePositions(new Set(gameplayRef.current?.getMinePositions() || []));
+    const sleep = (ms: number) => new Promise<void>((resolve) => {
+      autoPlayLoopRef.current = setTimeout(resolve, ms);
+    });
+
+    const runLoop = async () => {
+      while (isRunning) {
+        const newOpened = Array(totalCells).fill(true);
+        const newRevealedMines = Array(totalCells).fill(false);
+        const newAutoRevealed = Array(totalCells).fill(true);
+        const newClickedByUser = Array(totalCells).fill(false);
+        const newMinePositions = new Set<number>();
+
+        for (let i = 0; i < totalCells; i++) {
+          const isMine = Math.random() < 0.5;
+          if (isMine) {
+            newRevealedMines[i] = true;
+            newMinePositions.add(i);
+          }
         }
-      }
-      
-      if (isRunning) {
-        setAutoPlayActive(false);
+
+        setMinePositions(newMinePositions);
+        setOpened(newOpened);
+        setRevealedMines(newRevealedMines);
+        setAutoRevealed(newAutoRevealed);
+        setClickedByUser(newClickedByUser);
+
+        await sleep(1000);
+
+        if (!isRunning) break;
+
+        setOpened(Array(totalCells).fill(false));
+        setRevealedMines(Array(totalCells).fill(false));
+        setAutoRevealed(Array(totalCells).fill(false));
+        setClickedByUser(Array(totalCells).fill(false));
+
+        await sleep(1000);
       }
     };
-    
-    roundLoop();
+
+    runLoop();
 
     return () => {
       isRunning = false;
+      if (autoPlayLoopRef.current) {
+        clearTimeout(autoPlayLoopRef.current);
+        autoPlayLoopRef.current = null;
+      }
     };
-  }, [autoPlayActive, gameStarted]);
+  }, [autoPlayActive, rows, cols]);
+
+  useEffect(() => {
+    return () => {
+      if (autoPlayLoopRef.current) {
+        clearTimeout(autoPlayLoopRef.current);
+        autoPlayLoopRef.current = null;
+      }
+    };
+  }, []);
 
   const cells: number[] = Array.from({ length: rows * cols }, (_, i) => i);
 
@@ -438,9 +448,9 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
             <div className="grid grid-cols-2 gap-2 items-stretch w-full">
               
               {/* Row 1: Segmented Control (Manual/Auto) | Auto Settings Icon Button */}
-              <div className="h-7 rounded-full p-0.5 flex w-full" style={{ backgroundColor: COLORS.surface, border: BORDERS.standard, opacity: gameStarted ? 0.5 : 1, pointerEvents: gameStarted ? 'none' : 'auto' }}>
+              <div className="h-7 rounded-full p-0.5 flex w-full" style={{ backgroundColor: COLORS.surface, border: BORDERS.standard, opacity: (gameStarted || autoPlayActive) ? 0.5 : 1, pointerEvents: (gameStarted || autoPlayActive) ? 'none' : 'auto' }}>
                 <button
-                  disabled={gameStarted}
+                  disabled={gameStarted || autoPlayActive}
                   className="flex-1 h-full rounded-full text-[11px] font-semibold leading-none flex items-center justify-center transition whitespace-nowrap disabled:cursor-not-allowed"
                   style={{
                     color: controlMode === "manual" ? COLORS.text_primary : COLORS.text_muted,
@@ -458,12 +468,12 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                       e.currentTarget.style.color = COLORS.text_muted;
                     }
                   }}
-                  title={gameStarted ? "Cannot change mode during active round" : ""}
+                  title={(gameStarted || autoPlayActive) ? "Cannot change mode during active round" : ""}
                 >
                   Manual
                 </button>
                 <button
-                  disabled={gameStarted}
+                  disabled={gameStarted || autoPlayActive}
                   className="flex-1 h-full rounded-full text-[11px] font-semibold leading-none flex items-center justify-center transition whitespace-nowrap disabled:cursor-not-allowed"
                   style={{
                     color: controlMode === "auto" ? COLORS.text_primary : COLORS.text_muted,
@@ -481,7 +491,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                       e.currentTarget.style.color = COLORS.text_muted;
                     }
                   }}
-                  title={gameStarted ? "Cannot change mode during active round" : ""}
+                  title={(gameStarted || autoPlayActive) ? "Cannot change mode during active round" : ""}
                 >
                   Auto
                 </button>
@@ -491,7 +501,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
               <div className="justify-self-end">
                 <button
                   onClick={() => setShowAutoSettings(true)}
-                  disabled={controlMode !== "auto"}
+                  disabled={controlMode !== "auto" || autoPlayActive}
                   className="h-7 w-7 rounded-md flex items-center justify-center transition disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{
                     backgroundColor: controlMode === "auto" ? COLORS.surface : 'rgba(255, 255, 255, 0.02)',
@@ -508,7 +518,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                       e.currentTarget.style.backgroundColor = COLORS.surface;
                     }
                   }}
-                  title={controlMode === "auto" ? "Auto settings" : "Enable Auto mode to access settings"}
+                  title={controlMode === "auto" ? (autoPlayActive ? "Autoplay running" : "Auto settings") : "Enable Auto mode to access settings"}
                 >
                   <Settings2 size={16} />
                 </button>
@@ -517,28 +527,31 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
               {/* Row 2: Play Button | Bet Stepper */}
               {(() => {
                 const hasClickedAnyTile = clickedByUser.some(clicked => clicked);
+                const hasSelectedTiles = selectedTiles.some(selected => selected);
                 const isCashoutDisabled = gameStarted && !hasClickedAnyTile;
+                const isStartAutoplayDisabled = controlMode === "auto" && !autoPlayActive && (gameStarted || !hasSelectedTiles);
+                const isButtonDisabled = controlMode === "manual" ? isCashoutDisabled : isStartAutoplayDisabled;
                 
                 return (
                   <button
-                    disabled={isCashoutDisabled}
+                    disabled={isButtonDisabled}
                     className="h-7 w-full rounded-md px-3 text-xs font-semibold leading-none flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{
                       backgroundColor: gameStarted ? (isCashoutDisabled ? 'rgba(16, 185, 129, 0.5)' : COLORS.cashout_action) : COLORS.primary_action,
                       color: '#FFFFFF',
                       boxShadow: gameStarted && !isCashoutDisabled ? SHADOWS.success_glow : SHADOWS.sm
                     }}
-                    onClick={handlePlayButton}
-                    {...(isCashoutDisabled ? {} : createBrightnessHandler())}
-                    title={isCashoutDisabled ? "Click at least one tile to cashout" : ""}
+                    onClick={controlMode === "auto" ? (autoPlayActive ? handleStopAutoPlay : handleStartAutoPlay) : handlePlayButton}
+                    {...(isButtonDisabled ? {} : createBrightnessHandler())}
+                    title={isCashoutDisabled ? "Click at least one tile to cashout" : (isStartAutoplayDisabled ? "Select at least one tile to start" : (autoPlayActive ? "Stop autoplay" : ""))}
                   >
-                    {gameStarted ? 'Cashout' : 'Play'}
+                    {gameStarted ? 'Cashout' : (controlMode === 'auto' ? (autoPlayActive ? 'Stop Autoplay' : 'Start Autoplay') : 'Play')}
                   </button>
                 );
               })()}
               
               {/* Row 2 Col 2: Bet Stepper */}
-              <div className="h-7 w-full rounded-md flex items-center justify-between px-1" style={{ backgroundColor: COLORS.surface, border: BORDERS.standard }}>
+              <div className="h-7 w-full rounded-md flex items-center justify-between px-1" style={{ backgroundColor: COLORS.surface, border: BORDERS.standard, opacity: autoPlayActive ? 0.5 : 1, pointerEvents: autoPlayActive ? 'none' : 'auto' }}>
                 <button
                   className="h-6 w-6 rounded flex items-center justify-center transition text-xs font-medium" 
                   style={{ 
@@ -547,7 +560,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                     color: COLORS.text_primary
                   }}
                   onClick={handleDecreaseAmount}
-                  disabled={playAmountIndex === 0 || gameStarted}
+                  disabled={playAmountIndex === 0 || gameStarted || autoPlayActive}
                   onMouseEnter={(e) => {
                     if (!e.currentTarget.disabled) {
                       e.currentTarget.style.backgroundColor = COLORS.surface_hover;
@@ -568,7 +581,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                     color: COLORS.text_primary
                   }}
                   onClick={handleIncreaseAmount}
-                  disabled={playAmountIndex === BET_AMOUNTS.length - 1 || gameStarted}
+                  disabled={playAmountIndex === BET_AMOUNTS.length - 1 || gameStarted || autoPlayActive}
                   onMouseEnter={(e) => {
                     if (!e.currentTarget.disabled) {
                       e.currentTarget.style.backgroundColor = COLORS.surface_hover;
@@ -586,7 +599,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
               <select
                 value={minesCount}
                 onChange={(e) => setMinesCount(Number(e.target.value))}
-                className="h-7 w-full rounded-md px-2.5 text-xs font-medium leading-none disabled:opacity-50 transition appearance-none"
+                className="h-7 flex-1 rounded-md px-2.5 text-xs font-medium leading-none disabled:opacity-50 transition appearance-none"
                 style={{
                   backgroundColor: COLORS.surface,
                   border: BORDERS.standard,
@@ -597,7 +610,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                   backgroundSize: '1.2em 1.2em',
                   paddingRight: '2rem'
                 }}
-                disabled={gameStarted}
+                disabled={gameStarted || autoPlayActive}
               >
                 {Array.from({ length: 24 }, (_, i) => i + 1).map((num) => (
                   <option key={num} value={num} style={{ backgroundColor: '#111A2E', color: COLORS.text_primary }}>
@@ -606,10 +619,10 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                 ))}
               </select>
               
-              {/* Row 3 Col 2: Pick Random or Auto Counter */}
+              {/* Row 3 Col 2: Pick Random or Empty Panel in Auto Mode */}
               {controlMode === "manual" ? (
                 <button
-                  className="h-7 w-full rounded-md px-2.5 text-xs font-medium leading-none flex items-center justify-center transition"
+                  className="h-7 flex-1 rounded-md px-2.5 text-xs font-medium leading-none flex items-center justify-center transition"
                   style={{
                     backgroundColor: COLORS.surface,
                     border: BORDERS.standard,
@@ -629,20 +642,27 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                   Pick Random
                 </button>
               ) : (
-                <div className="h-7 w-full rounded-md flex items-center justify-between px-2 min-w-0" style={{ backgroundColor: COLORS.surface, border: BORDERS.standard }}>
-                  <span className="text-xs font-medium flex-shrink-0 leading-none" style={{ color: COLORS.text_muted }}>Auto</span>
+                <div
+                  className="h-7 flex-1 rounded-md px-2.5 flex items-center justify-between"
+                  style={{
+                    backgroundColor: COLORS.surface,
+                    border: BORDERS.standard,
+                  }}
+                >
+                  <span className="text-xs font-medium" style={{ color: COLORS.text_primary }}>Runs</span>
                   <input
                     type="number"
-                    min={1}
-                    value={autoPlayCount}
-                    onChange={(e) => setAutoPlayCount(Math.max(1, Number(e.target.value) || 1))}
-                    className="w-16 flex-shrink-0 text-xs font-semibold text-center tabular-nums leading-none transition appearance-none outline-none"
+                    min={0}
+                    max={9999}
+                    value={autoPickCount}
+                    onChange={(e) => setAutoPickCount(Math.max(0, Number(e.target.value) || 0))}
+                    className="h-5 w-12 rounded px-1 text-xs font-medium text-center tabular-nums disabled:opacity-50 transition"
                     style={{
                       backgroundColor: 'transparent',
-                      color: COLORS.text_primary,
-                      border: 'none'
+                      border: 'none',
+                      color: COLORS.text_primary
                     }}
-                    disabled={autoPlayActive}
+                    disabled={gameStarted || autoPlayActive}
                   />
                 </div>
               )}
@@ -715,7 +735,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                     className="h-8 w-8 rounded-lg font-bold flex items-center justify-center transition-all"
                     style={{ backgroundColor: COLORS.error, color: '#FFFFFF' }}
                     onClick={handleDecreaseAmount}
-                    disabled={playAmountIndex === 0 || gameStarted}
+                    disabled={playAmountIndex === 0 || gameStarted || autoPlayActive}
                   >
                     −
                   </button>
@@ -726,7 +746,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                     className="h-8 w-8 rounded-lg font-bold flex items-center justify-center transition-all"
                     style={{ backgroundColor: COLORS.success, color: '#FFFFFF' }}
                     onClick={handleIncreaseAmount}
-                    disabled={playAmountIndex === BET_AMOUNTS.length - 1 || gameStarted}
+                    disabled={playAmountIndex === BET_AMOUNTS.length - 1 || gameStarted || autoPlayActive}
                   >
                     +
                   </button>
@@ -737,10 +757,10 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                 <label className="block text-xs font-semibold mb-2" style={{ color: COLORS.text_muted }}>Runs</label>
                 <input
                   type="number"
-                  min={1}
-                  max={1000}
-                  value={autoPlayCount}
-                  onChange={(e) => setAutoPlayCount(Math.max(1, Number(e.target.value) || 1))}
+                  min={0}
+                  max={9999}
+                  value={autoPickCount}
+                  onChange={(e) => setAutoPickCount(Math.max(0, Number(e.target.value) || 0))}
                   className="w-full px-3 py-2 rounded-lg text-sm font-semibold"
                   style={{
                     backgroundColor: COLORS.panel,
