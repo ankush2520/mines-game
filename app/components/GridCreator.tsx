@@ -69,6 +69,9 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
   const [autoPickCount, setAutoPickCount] = useState(1);
   const [autoPlayActive, setAutoPlayActive] = useState(false);
   const [autoPlayResult, setAutoPlayResult] = useState<"win" | "loss" | null>(null);
+  const [showAutoModeWinPanel, setShowAutoModeWinPanel] = useState(false);
+  const [autoWinAmount, setAutoWinAmount] = useState(0);
+  const [autoMultiplier, setAutoMultiplier] = useState(1);
 
   // ========== REFS ==========
   const gameplayRef = useRef<Gameplay | null>(null);
@@ -297,6 +300,18 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
 
     const runLoop = async () => {
       while (isRunning) {
+        // Deduct bet amount at the start of each round
+        const betAmount = getPlayAmount();
+        setCredit(prev => {
+          const newCredit = prev - betAmount;
+          if (newCredit < 0) {
+            // Insufficient credits, stop autoplay
+            setTimeout(() => handleStopAutoPlay(), 0);
+            return prev;
+          }
+          return newCredit;
+        });
+
         const newOpened = Array(totalCells).fill(true);
         const newRevealedMines = Array(totalCells).fill(false);
         const newAutoRevealed = Array(totalCells).fill(true);
@@ -314,16 +329,45 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
           newRevealedMines[pos] = true;
         });
 
+        // Check if any selected tiles contain mines
+        const selectedIndices = selectedTiles.map((isSelected, idx) => isSelected ? idx : -1).filter(idx => idx !== -1);
+        const hasMineinSelected = selectedIndices.some(idx => newMinePositions.has(idx));
+        const isWin = !hasMineinSelected;
+
         setMinePositions(newMinePositions);
         setOpened(newOpened);
         setRevealedMines(newRevealedMines);
         setAutoRevealed(newAutoRevealed);
         setClickedByUser(newClickedByUser);
+        
+        // Only show win panel if all selected tiles are gems
+        if (isWin) {
+          // Calculate win amount based on selected tiles and bet amount
+          const selectedCount = selectedIndices.length;
+          const totalSafeTiles = totalCells - minesCount;
+          
+          // Calculate multiplier based on probability
+          let multiplier = 1;
+          for (let i = 0; i < selectedCount; i++) {
+            multiplier *= (totalSafeTiles - i) / (totalCells - i);
+          }
+          multiplier = 1 / multiplier;
+          
+          const winnings = betAmount * multiplier;
+          setAutoWinAmount(winnings);
+          setAutoMultiplier(multiplier);
+          
+          // Add winnings to credit
+          setCredit(prev => prev + winnings);
+          
+          setShowAutoModeWinPanel(true);
+        }
 
         await sleep(1000);
 
         if (!isRunning) break;
 
+        setShowAutoModeWinPanel(false);
         setOpened(Array(totalCells).fill(false));
         setRevealedMines(Array(totalCells).fill(false));
         setAutoRevealed(Array(totalCells).fill(false));
@@ -353,7 +397,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
         autoPlayLoopRef.current = null;
       }
     };
-  }, [autoPlayActive, rows, cols]);
+  }, [autoPlayActive, rows, cols, minesCount, selectedTiles, playAmountIndex]);
 
   useEffect(() => {
     return () => {
@@ -705,20 +749,32 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
       
       {/* Cashout Modal */}
       {showCashoutModal && (
-        <div className="fixed inset-0 flex items-center justify-center backdrop-blur-sm" style={{ backgroundColor: 'rgba(0, 0, 0, 0.75)' }}>
-          <div className="rounded-xl p-4 flex flex-col items-center gap-3 animate-in fade-in zoom-in duration-300" style={{ width: 280, backgroundColor: COLORS.panel, boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
-            <h2 className="text-sm font-medium" style={{ color: COLORS.text_muted }}>You Won!</h2>
-            <p className="text-2xl font-bold text-center" style={{ color: '#10B981', textShadow: '0 0 6px rgba(16, 185, 129, 0.35)' }}>${cashoutAmount.toFixed(2)}</p>
+        <div className="fixed inset-0 flex items-center justify-center" style={{ backgroundColor: 'rgba(0, 0, 0, 0)' }}>
+          <div className="rounded-xl p-3 flex flex-col items-center gap-2 animate-in fade-in zoom-in duration-300" style={{ width: 200, backgroundColor: 'rgba(23, 36, 69, 0.95)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+            <h2 className="text-xs font-medium" style={{ color: COLORS.text_muted }}>You Won!</h2>
+            <p className="text-xl font-bold text-center" style={{ color: '#10B981', textShadow: '0 0 6px rgba(16, 185, 129, 0.35)' }}>${cashoutAmount.toFixed(2)}</p>
             <button
               onClick={() => setShowCashoutModal(false)}
-              className="h-8 rounded-md text-xs font-semibold px-4 text-white transition-all hover:brightness-110 active:brightness-95"
+              className="h-7 rounded-md text-xs font-semibold px-3 text-white transition-all hover:brightness-110 active:brightness-95"
               style={{ 
                 backgroundColor: COLORS.cashout_action,
-                marginTop: '4px'
+                marginTop: '2px'
               }}
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Auto Mode Win Panel - appears during reveal, closes when grid closes */}
+      {showAutoModeWinPanel && (
+        <div className="fixed inset-0 flex items-center justify-center" style={{ backgroundColor: 'rgba(0, 0, 0, 0)' }}>
+          <div className="rounded-xl p-3 flex flex-col items-center gap-2 animate-in fade-in zoom-in duration-300" style={{ width: 200, backgroundColor: 'rgba(23, 36, 69, 0.95)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+            <h2 className="text-xs font-medium" style={{ color: COLORS.text_muted }}>You Won!</h2>
+            <p className="text-xl font-bold text-center" style={{ color: '#10B981', textShadow: '0 0 6px rgba(16, 185, 129, 0.35)' }}>${autoWinAmount.toFixed(2)}</p>
+            <p className="text-sm font-semibold" style={{ color: '#10B981' }}>{autoMultiplier.toFixed(2)}x</p>
+            <p className="text-[10px] font-medium" style={{ color: COLORS.text_muted }}>Round {initialRunsRef.current - autoPickCount + 1}</p>
           </div>
         </div>
       )}
