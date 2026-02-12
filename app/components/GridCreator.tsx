@@ -53,7 +53,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
 
   // ========== PLAYER STATE ==========
   const [credit, setCredit] = useState(10000);
-  const [playAmountIndex, setPlayAmountIndex] = useState(0);
+  const [betAmount, setBetAmount] = useState(10.00);
   const [minesCount, setMinesCount] = useState(1);
 
   // ========== UI STATE ==========
@@ -73,11 +73,23 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
   const [autoWinAmount, setAutoWinAmount] = useState(0);
   const [autoMultiplier, setAutoMultiplier] = useState(1);
 
+  // ========== AUTO MODE STRATEGY & STOP CONDITIONS ==========
+  const [stopOnProfitEnabled, setStopOnProfitEnabled] = useState(false);
+  const [stopOnProfitAmount, setStopOnProfitAmount] = useState(0);
+  const [stopOnLossEnabled, setStopOnLossEnabled] = useState(false);
+  const [stopOnLossAmount, setStopOnLossAmount] = useState(0);
+  const [onWinAction, setOnWinAction] = useState<"reset" | "increase" | "decrease" | "none">("reset");
+  const [onLossAction, setOnLossAction] = useState<"reset" | "increase" | "decrease" | "none">("increase");
+  const [onWinPercent, setOnWinPercent] = useState(0);
+  const [onLossPercent, setOnLossPercent] = useState(0);
+
   // ========== REFS ==========
   const gameplayRef = useRef<Gameplay | null>(null);
   const autoModeRef = useRef<AutoMode | null>(null);
   const autoPlayLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const initialRunsRef = useRef(0);
+  const creditAtAutoStartRef = useRef(0);
+  const baseBetAmountRef = useRef(0);
 
   const handleClick = (i: number) => {
     if (!gameStarted || !gameplayRef.current || gameOver) return;
@@ -170,19 +182,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
     }
   };
 
-  const handleIncreaseAmount = () => {
-    if (playAmountIndex < BET_AMOUNTS.length - 1) {
-      setPlayAmountIndex(playAmountIndex + 1);
-    }
-  };
-
-  const handleDecreaseAmount = () => {
-    if (playAmountIndex > 0) {
-      setPlayAmountIndex(playAmountIndex - 1);
-    }
-  };
-
-  const getPlayAmount = (): number => BET_AMOUNTS[playAmountIndex];
+  const getPlayAmount = (): number => betAmount;
 
   const handlePickRandom = () => {
     if (!gameStarted || !gameplayRef.current || gameOver) return;
@@ -227,6 +227,8 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
 
     setAutoPlayResult(null);
     initialRunsRef.current = autoPickCount;
+    creditAtAutoStartRef.current = credit;
+    baseBetAmountRef.current = betAmount;
     setAutoPlayActive(true);
   };
 
@@ -294,16 +296,49 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
 
     const totalCells = rows * cols;
     let isRunning = true;
+    let currentBetAmount = betAmount;
     const sleep = (ms: number) => new Promise<void>((resolve) => {
       autoPlayLoopRef.current = setTimeout(resolve, ms);
     });
 
+    const applyBetStrategy = (didWin: boolean) => {
+      const action = didWin ? onWinAction : onLossAction;
+      const percent = didWin ? onWinPercent : onLossPercent;
+
+      if (action === "reset") {
+        currentBetAmount = baseBetAmountRef.current;
+      } else if (action === "increase") {
+        const increase = (baseBetAmountRef.current * percent) / 100;
+        currentBetAmount += increase;
+      } else if (action === "decrease") {
+        const decrease = (baseBetAmountRef.current * percent) / 100;
+        currentBetAmount = Math.max(0, currentBetAmount - decrease);
+      } else if (action === "none") {
+        // no change
+      }
+      currentBetAmount = Math.max(0, currentBetAmount);
+      setBetAmount(currentBetAmount);
+    };
+
+    const checkStopConditions = (currentCredit: number) => {
+      const sessionProfit = currentCredit - creditAtAutoStartRef.current;
+      
+      if (stopOnProfitEnabled && stopOnProfitAmount > 0 && sessionProfit >= stopOnProfitAmount) {
+        return true; // Stop
+      }
+      if (stopOnLossEnabled && stopOnLossAmount > 0 && sessionProfit <= -stopOnLossAmount) {
+        return true; // Stop
+      }
+      return false;
+    };
+
     const runLoop = async () => {
       while (isRunning) {
-        // Deduct bet amount at the start of each round
-        const betAmount = getPlayAmount();
+        // Use current bet amount for this round
+        const roundBet = currentBetAmount;
+        
         setCredit(prev => {
-          const newCredit = prev - betAmount;
+          const newCredit = prev - roundBet;
           if (newCredit < 0) {
             // Insufficient credits, stop autoplay
             setTimeout(() => handleStopAutoPlay(), 0);
@@ -353,19 +388,39 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
           }
           multiplier = 1 / multiplier;
           
-          const winnings = betAmount * multiplier;
+          const winnings = roundBet * multiplier;
           setAutoWinAmount(winnings);
           setAutoMultiplier(multiplier);
           
           // Add winnings to credit
-          setCredit(prev => prev + winnings);
+          setCredit(prev => {
+            const newCredit = prev + winnings;
+            
+            // Check stop conditions after adding winnings
+            if (checkStopConditions(newCredit)) {
+              setTimeout(() => handleStopAutoPlay(), 0);
+            }
+            
+            return newCredit;
+          });
           
           setShowAutoModeWinPanel(true);
+        } else {
+          // Loss - check stop conditions
+          setCredit(prev => {
+            if (checkStopConditions(prev)) {
+              setTimeout(() => handleStopAutoPlay(), 0);
+            }
+            return prev;
+          });
         }
 
         await sleep(1000);
 
         if (!isRunning) break;
+
+        // Apply bet strategy after result is shown
+        applyBetStrategy(isWin);
 
         setShowAutoModeWinPanel(false);
         setOpened(Array(totalCells).fill(false));
@@ -397,7 +452,7 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
         autoPlayLoopRef.current = null;
       }
     };
-  }, [autoPlayActive, rows, cols, minesCount, selectedTiles, playAmountIndex]);
+  }, [autoPlayActive, rows, cols, minesCount, selectedTiles, betAmount, stopOnProfitEnabled, stopOnProfitAmount, stopOnLossEnabled, stopOnLossAmount, onWinAction, onLossAction, onWinPercent, onLossPercent]);
 
   useEffect(() => {
     return () => {
@@ -626,49 +681,30 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
                 );
               })()}
               
-              {/* Row 2 Col 2: Bet Stepper */}
-              <div className="h-7 w-full rounded-md flex items-center justify-between px-1" style={{ backgroundColor: COLORS.surface, border: BORDERS.standard, opacity: autoPlayActive ? 0.5 : 1, pointerEvents: autoPlayActive ? 'none' : 'auto' }}>
-                <button
-                  className="h-6 w-6 rounded flex items-center justify-center transition text-xs font-medium" 
-                  style={{ 
-                    backgroundColor: COLORS.surface,
-                    border: BORDERS.standard,
+              {/* Row 2 Col 2: Bet Amount Input */}
+              <div
+                className="h-7 flex-1 rounded-md px-2.5 flex items-center justify-between"
+                style={{
+                  backgroundColor: COLORS.surface,
+                  border: BORDERS.standard,
+                }}
+              >
+                <span className="text-xs font-medium" style={{ color: COLORS.text_primary }}>Bet</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={9999}
+                  step={0.01}
+                  value={betAmount.toFixed(2)}
+                  onChange={(e) => setBetAmount(Math.max(0, Number(e.target.value) || 0))}
+                  className="h-5 w-20 rounded px-1 text-xs font-medium text-center tabular-nums disabled:opacity-50 transition"
+                  style={{
+                    backgroundColor: 'transparent',
+                    border: 'none',
                     color: COLORS.text_primary
                   }}
-                  onClick={handleDecreaseAmount}
-                  disabled={playAmountIndex === 0 || gameStarted || autoPlayActive}
-                  onMouseEnter={(e) => {
-                    if (!e.currentTarget.disabled) {
-                      e.currentTarget.style.backgroundColor = COLORS.surface_hover;
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = COLORS.surface;
-                  }}
-                >
-                  <span className="leading-none">−</span>
-                </button>
-                <p className="flex-1 text-xs font-semibold text-center tabular-nums leading-none" style={{ color: COLORS.text_primary }}>${getPlayAmount()}</p>
-                <button
-                  className="h-6 w-6 rounded flex items-center justify-center transition text-xs font-medium"
-                  style={{ 
-                    backgroundColor: COLORS.surface,
-                    border: BORDERS.standard,
-                    color: COLORS.text_primary
-                  }}
-                  onClick={handleIncreaseAmount}
-                  disabled={playAmountIndex === BET_AMOUNTS.length - 1 || gameStarted || autoPlayActive}
-                  onMouseEnter={(e) => {
-                    if (!e.currentTarget.disabled) {
-                      e.currentTarget.style.backgroundColor = COLORS.surface_hover;
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = COLORS.surface;
-                  }}
-                >
-                  <span className="leading-none">+</span>
-                </button>
+                  disabled={gameStarted || autoPlayActive}
+                />
               </div>
               
               {/* Row 3 Col 1: Mines Selector */}
@@ -781,30 +817,39 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
 
       {/* Auto Settings Modal */}
       {showAutoSettings && (
-        <div className="fixed inset-0 flex items-center justify-center backdrop-blur-sm z-50" style={{ backgroundColor: 'rgba(0, 0, 0, 0.75)' }}>
-          <div className="rounded-2xl p-8 flex flex-col gap-6 animate-in fade-in zoom-in duration-300" style={{ width: 360, backgroundColor: COLORS.panel, border: BORDERS.standard, boxShadow: `0 25px 50px ${COLORS.panel}80` }}>
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold" style={{ color: COLORS.text_primary }}>Auto Mode Settings</h2>
+        <div className="fixed inset-0 flex items-center justify-center backdrop-blur-sm z-50" style={{ backgroundColor: 'rgba(0, 0, 0, 0.6)' }}>
+          <div className="rounded-2xl p-6 flex flex-col gap-4 animate-in fade-in zoom-in duration-300 overflow-y-auto max-h-[90vh]" style={{ width: 'min(360px, 92vw)', backgroundColor: 'rgba(15, 29, 58, 0.95)', border: '1px solid rgba(255, 255, 255, 0.1)', boxShadow: '0 20px 50px rgba(0, 0, 0, 0.4)' }}>
+            {/* Header */}
+            <div className="flex items-center justify-between shrink-0">
+              <h2 className="text-lg font-semibold" style={{ color: COLORS.text_primary }}>Auto Settings</h2>
               <button
                 onClick={() => setShowAutoSettings(false)}
-                className="text-2xl flex items-center justify-center w-8 h-8 hover:brightness-110 transition-all"
+                className="text-lg flex items-center justify-center w-6 h-6 rounded hover:brightness-110 transition-all"
                 style={{ color: COLORS.text_muted }}
               >
                 ✕
               </button>
             </div>
-            
-            <div className="flex flex-col gap-4">
+
+            {/* Game Settings Section */}
+            <div className="flex flex-col gap-3 pb-3 border-b" style={{ borderColor: 'rgba(255, 255, 255, 0.1)' }}>
+              <p className="text-[10px] font-semibold tracking-wider uppercase" style={{ color: 'rgba(255, 255, 255, 0.4)' }}>Game Settings</p>
+              
               <div>
-                <label className="block text-xs font-semibold mb-2" style={{ color: COLORS.text_muted }}>Number of Mines</label>
+                <label className="block text-[11px] font-medium mb-1.5" style={{ color: 'rgba(255, 255, 255, 0.6)' }}>Number of Mines</label>
                 <select
                   value={minesCount}
                   onChange={(e) => setMinesCount(Number(e.target.value))}
-                  className="w-full px-3 py-2 rounded-lg text-sm font-semibold"
+                  className="w-full px-2.5 py-1.5 rounded-lg text-sm font-medium appearance-none"
                   style={{
-                    backgroundColor: COLORS.panel,
-                    border: BORDERS.standard,
-                    color: COLORS.text_primary
+                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: COLORS.text_primary,
+                    backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22rgba(255,255,255,0.4)%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3e%3cpolyline points=%226 9 12 15 18 9%22%3e%3c/polyline%3e%3c/svg%3e")`,
+                    backgroundRepeat: 'no-repeat',
+                    backgroundPosition: 'right 0.5rem center',
+                    backgroundSize: '1rem 1rem',
+                    paddingRight: '2rem'
                   }}
                   disabled={gameStarted || autoPlayActive}
                 >
@@ -817,42 +862,36 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
               </div>
 
               <div>
-                <label className="block text-xs font-semibold mb-2" style={{ color: COLORS.text_muted }}>Bet Amount</label>
-                <div className="flex items-center gap-2">
-                  <button
-                    className="h-8 w-8 rounded-lg font-bold flex items-center justify-center transition-all"
-                    style={{ backgroundColor: COLORS.error, color: '#FFFFFF' }}
-                    onClick={handleDecreaseAmount}
-                    disabled={playAmountIndex === 0 || gameStarted || autoPlayActive}
-                  >
-                    −
-                  </button>
-                  <div className="flex-1 px-3 py-2 rounded-lg text-sm font-bold text-center" style={{ backgroundColor: COLORS.panel, border: BORDERS.standard, color: COLORS.text_primary }}>
-                    ${getPlayAmount()}
-                  </div>
-                  <button
-                    className="h-8 w-8 rounded-lg font-bold flex items-center justify-center transition-all"
-                    style={{ backgroundColor: COLORS.success, color: '#FFFFFF' }}
-                    onClick={handleIncreaseAmount}
-                    disabled={playAmountIndex === BET_AMOUNTS.length - 1 || gameStarted || autoPlayActive}
-                  >
-                    +
-                  </button>
-                </div>
+                <label className="block text-[11px] font-medium mb-1.5" style={{ color: 'rgba(255, 255, 255, 0.6)' }}>Bet Amount</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={9999}
+                  step={0.01}
+                  value={betAmount.toFixed(2)}
+                  onChange={(e) => setBetAmount(Math.max(0, Number(e.target.value) || 0))}
+                  className="w-full px-2.5 py-1.5 rounded-lg text-sm font-medium focus:outline-none focus:ring-1 transition-all"
+                  style={{
+                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: COLORS.text_primary
+                  }}
+                  disabled={gameStarted || autoPlayActive}
+                />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold mb-2" style={{ color: COLORS.text_muted }}>Runs</label>
+                <label className="block text-[11px] font-medium mb-1.5" style={{ color: 'rgba(255, 255, 255, 0.6)' }}>Number of Runs (0 = infinite)</label>
                 <input
                   type="number"
                   min={0}
                   max={9999}
                   value={autoPickCount}
                   onChange={(e) => setAutoPickCount(Math.max(0, Number(e.target.value) || 0))}
-                  className="w-full px-3 py-2 rounded-lg text-sm font-semibold"
+                  className="w-full px-2.5 py-1.5 rounded-lg text-sm font-medium focus:outline-none focus:ring-1 transition-all"
                   style={{
-                    backgroundColor: COLORS.panel,
-                    border: BORDERS.standard,
+                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
                     color: COLORS.text_primary
                   }}
                   disabled={autoPlayActive}
@@ -860,19 +899,164 @@ export default function GridCreator({ rows = GAME_BOARD.rows, cols = GAME_BOARD.
               </div>
             </div>
 
-            <div className="flex gap-3 pt-2">
+            {/* Stop Conditions Section */}
+            <div className="flex flex-col gap-3 pb-3 border-b" style={{ borderColor: 'rgba(255, 255, 255, 0.1)' }}>
+              <p className="text-[10px] font-semibold tracking-wider uppercase" style={{ color: 'rgba(255, 255, 255, 0.4)' }}>Stop Conditions</p>
+              
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={stopOnProfitEnabled}
+                  onChange={(e) => setStopOnProfitEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded"
+                  style={{ cursor: 'pointer', accentColor: COLORS.primary_action }}
+                  disabled={autoPlayActive}
+                />
+                <label className="text-[11px] font-medium flex-1" style={{ color: 'rgba(255, 255, 255, 0.7)', cursor: 'pointer' }}>Stop on Profit</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={99999}
+                  step={0.01}
+                  value={stopOnProfitAmount}
+                  onChange={(e) => setStopOnProfitAmount(Math.max(0, Number(e.target.value) || 0))}
+                  placeholder="0.00"
+                  className="w-20 px-2 py-1 rounded text-xs font-medium text-right focus:outline-none focus:ring-1 transition-all"
+                  style={{
+                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: COLORS.text_primary
+                  }}
+                  disabled={autoPlayActive || !stopOnProfitEnabled}
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={stopOnLossEnabled}
+                  onChange={(e) => setStopOnLossEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded"
+                  style={{ cursor: 'pointer', accentColor: COLORS.primary_action }}
+                  disabled={autoPlayActive}
+                />
+                <label className="text-[11px] font-medium flex-1" style={{ color: 'rgba(255, 255, 255, 0.7)', cursor: 'pointer' }}>Stop on Loss</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={99999}
+                  step={0.01}
+                  value={stopOnLossAmount}
+                  onChange={(e) => setStopOnLossAmount(Math.max(0, Number(e.target.value) || 0))}
+                  placeholder="0.00"
+                  className="w-20 px-2 py-1 rounded text-xs font-medium text-right focus:outline-none focus:ring-1 transition-all"
+                  style={{
+                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: COLORS.text_primary
+                  }}
+                  disabled={autoPlayActive || !stopOnLossEnabled}
+                />
+              </div>
+            </div>
+
+            {/* Bet Strategy Section */}
+            <div className="flex flex-col gap-3 pb-3">
+              <p className="text-[10px] font-semibold tracking-wider uppercase" style={{ color: 'rgba(255, 255, 255, 0.4)' }}>Bet Strategy</p>
+              
+              <div className="flex items-center gap-2">
+                <label className="text-[11px] font-medium w-14" style={{ color: 'rgba(255, 255, 255, 0.6)' }}>On Win</label>
+                <select
+                  value={onWinAction}
+                  onChange={(e) => setOnWinAction(e.target.value as any)}
+                  className="flex-1 px-2 py-1 rounded text-xs font-medium appearance-none"
+                  style={{
+                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: COLORS.text_primary,
+                    backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22rgba(255,255,255,0.4)%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3e%3cpolyline points=%226 9 12 15 18 9%22%3e%3c/polyline%3e%3c/svg%3e")`,
+                    backgroundRepeat: 'no-repeat',
+                    backgroundPosition: 'right 0.35rem center',
+                    backgroundSize: '0.8rem 0.8rem',
+                    paddingRight: '1.5rem'
+                  }}
+                  disabled={autoPlayActive}
+                >
+                  <option value="reset">Reset</option>
+                  <option value="increase">Increase</option>
+                  <option value="decrease">Decrease</option>
+                  <option value="none">None</option>
+                </select>
+                {(onWinAction === "increase" || onWinAction === "decrease") && (
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={onWinPercent}
+                    onChange={(e) => setOnWinPercent(Math.max(1, Number(e.target.value) || 0))}
+                    placeholder="%"
+                    className="w-16 px-2 py-1 rounded text-xs font-medium text-right focus:outline-none focus:ring-1 transition-all"
+                    style={{
+                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      color: COLORS.text_primary
+                    }}
+                    disabled={autoPlayActive}
+                  />
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <label className="text-[11px] font-medium w-14" style={{ color: 'rgba(255, 255, 255, 0.6)' }}>On Loss</label>
+                <select
+                  value={onLossAction}
+                  onChange={(e) => setOnLossAction(e.target.value as any)}
+                  className="flex-1 px-2 py-1 rounded text-xs font-medium appearance-none"
+                  style={{
+                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: COLORS.text_primary,
+                    backgroundImage: `url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22rgba(255,255,255,0.4)%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3e%3cpolyline points=%226 9 12 15 18 9%22%3e%3c/polyline%3e%3c/svg%3e")`,
+                    backgroundRepeat: 'no-repeat',
+                    backgroundPosition: 'right 0.35rem center',
+                    backgroundSize: '0.8rem 0.8rem',
+                    paddingRight: '1.5rem'
+                  }}
+                  disabled={autoPlayActive}
+                >
+                  <option value="reset">Reset</option>
+                  <option value="increase">Increase</option>
+                  <option value="decrease">Decrease</option>
+                  <option value="none">None</option>
+                </select>
+                {(onLossAction === "increase" || onLossAction === "decrease") && (
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={onLossPercent}
+                    onChange={(e) => setOnLossPercent(Math.max(1, Number(e.target.value) || 0))}
+                    placeholder="%"
+                    className="w-16 px-2 py-1 rounded text-xs font-medium text-right focus:outline-none focus:ring-1 transition-all"
+                    style={{
+                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      color: COLORS.text_primary
+                    }}
+                    disabled={autoPlayActive}
+                  />
+                )}
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex gap-2 pt-2 shrink-0 border-t" style={{ borderColor: 'rgba(255, 255, 255, 0.1)' }}>
               <button
                 onClick={() => setShowAutoSettings(false)}
-                className="flex-1 h-10 rounded-xl font-semibold text-sm transition-all"
+                className="flex-1 h-8 rounded-lg font-semibold text-sm transition-all focus:outline-none focus:ring-1"
                 style={{
-                  backgroundColor: `${COLORS.text_muted}1a`,
-                  color: COLORS.text_primary
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = `${COLORS.text_muted}26`;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = `${COLORS.text_muted}1a`;
+                  backgroundColor: COLORS.primary_action,
+                  color: '#FFFFFF'
                 }}
               >
                 Done
