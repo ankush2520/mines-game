@@ -1,10 +1,5 @@
-import Image from "next/image";
-import GridCreator from "./components/GridCreator";
+import MinesApp from "./MinesApp";
 
 export default function Home() {
-  return (
-    <div className="min-h-screen flex items-center justify-center overflow-hidden" style={{ backgroundColor: '#0B1020' }}>
-      <GridCreator rows={5} cols={5} />
-    </div>
-  );
+  return <MinesApp />;
 }
